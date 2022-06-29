@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ko"
+      th:with="currentPage='index'"
+      xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Spring Boot WebRTC Demo</title>
+    <link href="/css/style.css" rel="stylesheet" type="text/css">
+</head>
+<body onbeforeunload="disconnect();">
+<div id="selectedVideosContainer">
+    <video id="remoteView"></video>
+    <video id="selfView"></video>
+</div>
+<div id="remoteVideosContainer"></div>
+
+<script src='/js/adapter-latest.js'></script>
+<script src='/js/main.js'></script>
+</body>
+</html>
