@@ -1,96 +1,87 @@
 package com.example.webrtc.handler;
 
-import com.example.webrtc.dto.Message;
-import com.example.webrtc.util.Utils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
-import java.util.HashMap;
-import java.util.Map;
+import com.google.gson.Gson;
 
+import lombok.extern.slf4j.Slf4j;
+
+/**
+ * client간 직접 RTC Connection을 맺을 수 있도록 서로의 metadata를 주고받는다.
+ */
+@Slf4j
+@Component
 public class SocketHandler extends TextWebSocketHandler {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SocketHandler.class);
+	List<WebSocketSession> sessions = new CopyOnWriteArrayList<>();
+	private static final String CREATE_OR_JOIN = "create or join";
+	private static final String BYE = "bye";
+	private static final String FULL = "full";
 
-    private static final String TYPE_INIT = "init";
-    private static final String TYPE_LOGOUT = "logout";
-
-    /**
-     * Cache of sessions by users.
-     */
-    private final Map<String, WebSocketSession> connectedUsers = new HashMap<>();
+	private static final int maxPerson = 10;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        LOG.info("[" + session.getId() + "] Connection established " + session.getId());
+    	log.info("new session : {}", session); 
+    	// StandardWebSocketSession[id=c11b213d-3011-04d3-fbfd-5199fbe8e65f, uri=wss://localhost:7070/socket]
+    	// WebSocketServerSockJsSession[id=ratcfrqn]
+    	// XhrStreamingSockJsSession[id=vatqvdsu] --> mobile
+        if(sessions.size() < 2) {
+        	sessions.add(session);        	
+        	sendMessage(session, CREATE_OR_JOIN);
+        }
+        else {
+        	sendMessage(session, FULL);
+        }
+        
+    }
+    @Override
+	public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+    	sessions.remove(session);
+    	sendMessage(session, BYE);
+	}
 
-        // send the message to all other peers, that new men its being registered
-        final Message newMenOnBoard = new Message();
-        newMenOnBoard.setType(TYPE_INIT);
-        newMenOnBoard.setSender(session.getId());
-
-        connectedUsers.values().forEach(webSocketSession -> {
-            try {
-                webSocketSession.sendMessage(new TextMessage(Utils.getString(newMenOnBoard)));
-            } catch (Exception e) {
-                LOG.warn("Error while message sending.", e);
+	@Override
+    public void handleTextMessage(WebSocketSession session, TextMessage message) throws InterruptedException, IOException {
+		log.debug("message.payload : {}", message.getPayload());
+		String type = getType(message);
+		if(FULL.equals(type)) {
+			session.sendMessage(message);
+			return;
+		}
+		boolean forEveryone = CREATE_OR_JOIN.equals(type) || BYE.equals(type);
+        for (WebSocketSession sess : sessions) {
+       
+        	/**
+        	 * 메세지를 발행한 session을 제외하고 전송
+        	 */
+            if (forEveryone || sess.isOpen() && !session.getId().equals(sess.getId())) {
+                sess.sendMessage(message);
             }
-        });
-
-        // put the session to the "cache".
-        connectedUsers.put(session.getId(), session);
-    }
-
-    @Override
-    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
-        LOG.info("[" + session.getId() + "] Connection closed " + session.getId() + " with status: " + status.getReason());
-        removeUserAndSendLogout(session.getId());
-    }
-
-    @Override
-    public void handleTransportError(WebSocketSession session, Throwable exception) throws Exception {
-        LOG.info("[" + session.getId() + "] Connection error " + session.getId() + " with status: " + exception.getLocalizedMessage());
-        removeUserAndSendLogout(session.getId());
-    }
-
-    @Override
-    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        LOG.info("handleTextMessage : {}", message.getPayload());
-
-        Message signalMessage = Utils.getObject(message.getPayload());
-
-        // with the destinationUser find the targeted socket, if any
-        String destinationUser = signalMessage.getReceiver();
-        WebSocketSession destSocket = connectedUsers.get(destinationUser);
-        // if the socket exists and is open, we go on
-        if (destSocket != null && destSocket.isOpen()) {
-            // set the sender as current sessionId.
-            signalMessage.setSender(session.getId());
-            final String resendingMessage = Utils.getString(signalMessage);
-            LOG.info("send message {} to {}", resendingMessage, destinationUser);
-            destSocket.sendMessage(new TextMessage(resendingMessage));
         }
     }
+	
+	private String getType(TextMessage message) {
+		String _payload = message.getPayload();
+		Map<String, Object> payload = new Gson().fromJson(_payload, HashMap.class);
+		return String.valueOf(payload.get("type"));
+	}
+	
+	private synchronized void sendMessage(WebSocketSession session, String type) throws Exception{
+		Map<String, Object> payload = new HashMap<>();
+		payload.put("type", type);
+        payload.put("numOfClients", sessions.size());
+        handleTextMessage(session, new TextMessage(new Gson().toJson(payload)));
+	}
 
-    private void removeUserAndSendLogout(final String sessionId) {
-
-        connectedUsers.remove(sessionId);
-
-        // send the message to all other peers, somebody(sessionId) leave.
-        final Message menOut = new Message();
-        menOut.setType(TYPE_LOGOUT);
-        menOut.setSender(sessionId);
-
-        connectedUsers.values().forEach(webSocket -> {
-            try {
-                webSocket.sendMessage(new TextMessage(Utils.getString(menOut)));
-            } catch (Exception e) {
-                LOG.warn("Error while message sending.", e);
-            }
-        });
-    }
 }
